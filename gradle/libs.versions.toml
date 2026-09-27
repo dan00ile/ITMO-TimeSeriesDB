@@ -1,0 +1,12 @@
+# Одно место для версий на все модули: с лабы 3 их будет пять.
+[versions]
+jackson = "2.20.0"
+junit = "5.13.4"
+
+[libraries]
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+
+# версии junit-артефактов приходят из junit-bom
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
