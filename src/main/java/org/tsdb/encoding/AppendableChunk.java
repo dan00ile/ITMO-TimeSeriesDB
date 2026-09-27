@@ -9,7 +9,7 @@ public interface AppendableChunk extends Chunk {
      * Добавляет новую точку.
      *
      * @throws org.tsdb.model.OutOfOrderSampleException
-     *         если timestamp <= времени последней точки
+     *         если timestamp меньше или равно времени последней точки
      */
     void append(long timestamp, double value);
 
