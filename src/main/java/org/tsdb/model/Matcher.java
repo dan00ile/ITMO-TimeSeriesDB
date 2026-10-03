@@ -21,6 +21,9 @@ public sealed interface Matcher {
         }
     }
 
+    // Совпадение со всем значением: шаблон оборачивается в ^(?:pattern)$ (host=~"web" не совпадает с web-1).
+    // Синтаксис — java.util.regex. Невалидный шаблон — PatternSyntaxException (IllegalArgumentException) в конструкторе.
+    // Конструктор компилирует только для проверки; для выполнения — один раз на запрос в MemInvertedIndex.select.
     record Regex(String name, String pattern) implements Matcher {
         public Regex {
             Objects.requireNonNull(name, "name");
@@ -28,6 +31,7 @@ public sealed interface Matcher {
         }
     }
 
+    // Отрицание Regex, та же семантика полного совпадения.
     record NotRegex(String name, String pattern) implements Matcher {
         public NotRegex {
             Objects.requireNonNull(name, "name");

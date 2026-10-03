@@ -11,7 +11,8 @@ import org.tsdb.model.Labels;
 import org.tsdb.model.Matcher;
 import org.tsdb.query.Queryable;
 
-// Последние ~2 часа данных Регистрацию серии и запись в WAL делает фасад, head про WAL не знает.
+// Последние ~2 часа данных. Регистрацию серии и запись в WAL делает фасад, head про WAL не знает.
+// Пустой head: minTime() == Long.MAX_VALUE, maxTime() == Long.MIN_VALUE — не пересекается ни с одним диапазоном.
 public interface Head extends Queryable {
     @Override
     long minTime();
@@ -26,11 +27,11 @@ public interface Head extends Queryable {
     // Дописать точку в открытый chunk серии; полный chunk закрывается, открывается новый.
     void append(long seriesId, long timestamp, double value);
 
-    // Все chunk'и серии, пересекающиеся с [start, end]
+    // Все chunk'и серии, пересекающиеся с [start, end]; снимок, безопасен при конкурентных append
     @Override
     List<Chunk> chunks(long seriesId, long start, long end);
 
-    // Отрезать всё, что  < upTo в виде набора данных для BlockWriter
+    // Отрезать всё, что < upTo, в виде набора данных для BlockWriter
     HeadSnapshot truncate(long upTo);
 
     @Override

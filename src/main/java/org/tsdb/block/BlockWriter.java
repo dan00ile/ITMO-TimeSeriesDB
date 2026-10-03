@@ -12,6 +12,9 @@ public interface BlockWriter {
 
     /**
      * Записать снимок Head в новый блок.
+     * Id серий назначаются заново: 1..n в порядке Labels.canonical().
+     *
+     * @throws IllegalArgumentException если снимок пуст (нет серий)
      */
     BlockMeta write(
             HeadSnapshot snapshot,
@@ -20,6 +23,7 @@ public interface BlockWriter {
 
     /**
      * Слить несколько блоков в один.
+     * Id серий назначаются заново: 1..n в порядке Labels.canonical().
      */
     BlockMeta merge(
             List<Block> blocks,

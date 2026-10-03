@@ -7,7 +7,7 @@ import java.util.stream.Stream;
 import org.tsdb.model.Labels;
 import org.tsdb.model.Series;
 
-// Двусторонняя мапа Labels <-> seriesId. Одна на head у блока — своя, только для чтения.
+// Двусторонняя мапа Labels <-> seriesId. Одна на head; у блока — своя, только для чтения.
 public interface SeriesRegistry {
     // Id серии; новая серия получает следующий id.
     long getOrCreate(Labels labels);

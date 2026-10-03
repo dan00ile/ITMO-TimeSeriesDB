@@ -9,6 +9,13 @@ import org.tsdb.model.Series;
 
 // In-memory registry для head
 public final class MemSeriesRegistry implements SeriesRegistry {
+    // Зарегистрировать серию с заданным id: replay WAL (SeriesCreated, checkpoint) и репликация.
+    // Идемпотентный: повтор с теми же labels — no-op; id или labels уже заняты другой парой — IllegalStateException.
+    // После restore следующий id из getOrCreate = max(id) + 1.
+    public void restore(long id, Labels labels) {
+        throw new UnsupportedOperationException("lab2");
+    }
+
     @Override
     public long getOrCreate(Labels labels) {
         throw new UnsupportedOperationException("lab2");
