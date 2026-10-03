@@ -8,7 +8,11 @@ import org.tsdb.model.Matcher;
 
 // Инвертированный индекс
 public interface InvertedIndex {
-    // Добавить серию. Id должен быть больше всех добавленных ранее
+    // Добавить серию. Id должен быть больше всех добавленных ранее: postings — дописываемый long[] без сортировки.
+    // Нарушение — IllegalArgumentException, а не тихая порча postings. Следствия:
+    //  - checkpoint WAL хранит серии по возрастанию id, replay вызывает add в этом порядке;
+    //  - id внутри блока назначаются заново: 1..n в порядке Labels.canonical(). BlockWriter.write и merge
+    //    строят индекс в том же порядке. Id head'а в блок не переносятся (QueryEngine склеивает по Labels).
     void add(long id, Labels labels);
 
     // Серии с лейблом name="value"

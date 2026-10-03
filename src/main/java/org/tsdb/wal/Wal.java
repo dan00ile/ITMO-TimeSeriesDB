@@ -34,9 +34,11 @@ public interface Wal extends AutoCloseable {
     void truncateBefore(long timestamp);
 
     /**
-     * Читать записи начиная с указанной позиции.
-     *
-     * Stream необходимо закрыть вызывающему коду.
+     * Записи с позицией >= position, по возрастанию позиции.
+     * position, не совпадающая с началом записи, — IllegalArgumentException.
+     * Позиция раньше самого старого сегмента (он уже удалён truncateBefore) — IllegalStateException:
+     * вызывающему нужен full resync.
+     * Stream держит файлы открытыми — закрыть (try-with-resources).
      */
     Stream<WalEntry> readFrom(WalPosition position);
 
