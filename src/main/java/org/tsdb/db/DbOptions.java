@@ -8,7 +8,8 @@ import java.util.Objects;
  * в тестах окна измеряются секундами.
  *   walSyncIntervalMs == 0 — fsync на каждый append;
  *   retentionMs == 0 — хранить вечно, удаление только через deleteBefore;
- *   compactionIntervalMs == 0 — фоновая компакция выключена.
+ *   compactionIntervalMs == 0 — фоновое обслуживание выключено: head режется в блок только через flush,
+ *   компакция и retention — только вручную.
  * dataDir нормализуется, чтобы equals не зависел от "data" против "./data".
  */
 public record DbOptions(
