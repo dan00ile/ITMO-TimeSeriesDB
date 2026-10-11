@@ -37,16 +37,6 @@ public final class ListChunkCodec implements ChunkCodec {
         return new ListChunk(List.copyOf(samples), n);
     }
 
-    // Точки chunk'а списком — для ассертов.
-    public static List<Sample> samples(Chunk chunk) {
-        List<Sample> out = new ArrayList<>();
-        SampleIterator it = chunk.iterator();
-        while (it.next()) {
-            out.add(new Sample(it.timestamp(), it.value()));
-        }
-        return out;
-    }
-
     private static final class ListChunk implements AppendableChunk {
         private final List<Sample> samples;
         private final int maxSamples;

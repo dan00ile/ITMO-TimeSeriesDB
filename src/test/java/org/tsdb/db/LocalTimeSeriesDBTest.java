@@ -274,7 +274,9 @@ class LocalTimeSeriesDBTest {
             db.runMaintenance();
 
             assertEquals(1, db.stats().numBlocks());
-            assertEquals(20, db.stats().headSamples(), "в блок ушло окно [0, 1000)");
+            // chunk'и по 4 точки: [0..300] и [400..700] ушли в блок, [800..1100] пересекает границу 1000
+            // и остаётся в head целиком — head режет по chunk'ам, не по точкам
+            assertEquals(22, db.stats().headSamples(), "в блок ушли chunk'и окна [0, 1000)");
             assertEquals(samples, samplesOf(db.query(ALL), cpu("web-1")));
         }
     }

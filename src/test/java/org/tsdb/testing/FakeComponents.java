@@ -12,10 +12,12 @@ import org.tsdb.db.DbComponents;
 import org.tsdb.db.DbOptions;
 import org.tsdb.db.DbPaths;
 import org.tsdb.head.Head;
+import org.tsdb.head.MemHead;
+import org.tsdb.query.DefaultQueryEngine;
 import org.tsdb.query.QueryEngine;
 import org.tsdb.wal.Wal;
 
-// Простые слои A и B в памяти — чтобы проверять фасад, пока настоящих реализаций нет.
+// Слои A — простые заглушки в памяти; слои B — настоящие (MemHead на ListChunkCodec, DefaultQueryEngine).
 // Компакция сливает все блоки в один, retention удаляет блоки старше now - retentionMs.
 public final class FakeComponents implements DbComponents {
 
@@ -34,7 +36,7 @@ public final class FakeComponents implements DbComponents {
 
     @Override
     public Head newHead(DbOptions options) {
-        return new FakeHead();
+        return new MemHead(new ListChunkCodec(options.chunkMaxSamples()));
     }
 
     @Override
@@ -49,7 +51,7 @@ public final class FakeComponents implements DbComponents {
 
     @Override
     public QueryEngine queryEngine(DbOptions options) {
-        return new FakeQueryEngine();
+        return new DefaultQueryEngine();
     }
 
     @Override

@@ -4,7 +4,9 @@ import org.tsdb.block.BlockReader;
 import org.tsdb.block.BlockWriter;
 import org.tsdb.compact.CompactionPlanner;
 import org.tsdb.compact.RetentionPolicy;
+import org.tsdb.encoding.ChunkCodec;
 import org.tsdb.head.Head;
+import org.tsdb.head.MemHead;
 import org.tsdb.query.DefaultQueryEngine;
 import org.tsdb.query.QueryEngine;
 import org.tsdb.wal.Wal;
@@ -19,7 +21,7 @@ final class DefaultComponents implements DbComponents {
 
     @Override
     public Head newHead(DbOptions options) {
-        throw notReady("Head", "B");
+        return new MemHead(chunkCodec(options));
     }
 
     @Override
@@ -45,6 +47,11 @@ final class DefaultComponents implements DbComponents {
     @Override
     public RetentionPolicy retentionPolicy(DbOptions options) {
         throw notReady("RetentionPolicy", "A");
+    }
+
+    // Gorilla с лимитом options.chunkMaxSamples() точек на chunk.
+    private static ChunkCodec chunkCodec(DbOptions options) {
+        throw notReady("ChunkCodec (Gorilla)", "A");
     }
 
     private static UnsupportedOperationException notReady(String what, String owner) {

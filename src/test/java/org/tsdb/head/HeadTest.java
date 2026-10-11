@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.tsdb.testing.ListChunkCodec.samples;
+import static org.tsdb.testing.ListChunk.samplesOf;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -101,7 +101,7 @@ class HeadTest {
         head.append(id, 1, 1);
         Chunk snapshot = head.chunks(id, 0, 100).get(0);
         head.append(id, 2, 2);
-        assertEquals(List.of(new Sample(1, 1)), samples(snapshot));
+        assertEquals(List.of(new Sample(1, 1)), samplesOf(snapshot));
     }
 
     @Test

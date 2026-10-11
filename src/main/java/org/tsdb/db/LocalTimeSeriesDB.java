@@ -32,6 +32,7 @@ import org.tsdb.compact.RetentionPolicy;
 import org.tsdb.encoding.Chunk;
 import org.tsdb.head.Head;
 import org.tsdb.head.HeadSnapshot;
+import org.tsdb.index.MemSeriesRegistry;
 import org.tsdb.model.Labels;
 import org.tsdb.model.OutOfOrderSampleException;
 import org.tsdb.model.Query;
@@ -358,7 +359,6 @@ public final class LocalTimeSeriesDB implements TimeSeriesDB {
         removeBlocks(replaced);
     }
 
-    // Журнал читается в том же порядке, в каком писался, поэтому getOrCreate выдаёт сериям те же id.
     private void replayWal() {
         wal.replay(record -> {
             switch (record) {
@@ -372,11 +372,22 @@ public final class LocalTimeSeriesDB implements TimeSeriesDB {
         });
     }
 
+    // Серия получает ровно id из журнала: после truncateBefore первые SeriesCreated уже удалены
+    // (их заменяет checkpoint), и getOrCreate выдал бы другие номера.
     private void restoreSeries(long id, Labels labels) {
         OptionalLong known = head.registry().get(labels);
-        long actual = known.isPresent() ? known.getAsLong() : head.registry().getOrCreate(labels);
-        if (actual != id) {
-            throw new CorruptedWalException("series " + labels + " has id " + id + " in WAL, got " + actual);
+        if (head.registry() instanceof MemSeriesRegistry registry) {
+            try {
+                registry.restore(id, labels);
+            } catch (IllegalStateException e) {
+                throw new CorruptedWalException("series " + labels + " with id " + id + ": " + e.getMessage(), e);
+            }
+        } else {
+            // заглушки без restore: id совпадут, только если журнал не обрезали
+            long actual = known.isPresent() ? known.getAsLong() : head.registry().getOrCreate(labels);
+            if (actual != id) {
+                throw new CorruptedWalException("series " + labels + " has id " + id + " in WAL, got " + actual);
+            }
         }
         if (known.isEmpty()) {
             head.index().add(id, labels);
@@ -441,7 +452,9 @@ public final class LocalTimeSeriesDB implements TimeSeriesDB {
         }
         Path tmp = paths.tmpDir().resolve(newUlid());
         publishBlock(tmp, blockWriter.write(snapshot, tmp));
-        wal.truncateBefore(upTo);
+        // Head режет по chunk'ам: chunk, пересекающий upTo, остаётся в памяти вместе с точками < upTo.
+        // Их записи в WAL нужны до следующего сброса, поэтому граница — самая старая точка head.
+        wal.truncateBefore(Math.min(upTo, head.minTime()));
     }
 
     // «Сейчас» — самая свежая точка в БД, а не часы, как в Prometheus: импорт старых данных не удалится сразу.
