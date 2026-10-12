@@ -143,6 +143,93 @@ class FileWalTest {
         }
     }
 
+    // Сегмент с SeriesCreated удаляется, серия переживает рестарт через checkpoint.
+    @Test
+    void seriesSurviveTruncateViaCheckpoint() {
+        Labels cpu = Labels.of("cpu_usage", "host", "web-1");
+        try (FileWal wal = new FileWal(tempDir, 60, 0)) {
+            wal.append(new WalRecord.SeriesCreated(7, cpu));                          // сегмент 1
+            wal.append(new WalRecord.Samples(List.of(new SampleEntry(7, 100, 1.0)))); // сегмент 2
+            wal.append(new WalRecord.Samples(List.of(new SampleEntry(7, 300, 3.0)))); // сегмент 3
+
+            wal.truncateBefore(250);
+
+            assertFalse(Files.exists(tempDir.resolve("00000001")));
+            assertFalse(Files.exists(tempDir.resolve("00000002")));
+            assertTrue(Files.exists(tempDir.resolve("checkpoint.00000003")));
+        }
+
+        try (FileWal wal = new FileWal(tempDir, 60, 0)) {
+            List<WalRecord> restored = new ArrayList<>();
+            wal.replay(restored::add);
+            assertEquals(List.of(
+                    new WalRecord.SeriesCreated(7, cpu),
+                    new WalRecord.Samples(List.of(new SampleEntry(7, 300, 3.0)))), restored);
+        }
+    }
+
+    // Новый checkpoint содержит и серии из прошлого checkpoint'а, старый удаляется.
+    @Test
+    void checkpointCarriesSeriesAcrossRestarts() {
+        Labels a = Labels.of("cpu_usage", "host", "a");
+        Labels b = Labels.of("cpu_usage", "host", "b");
+        try (FileWal wal = new FileWal(tempDir, 60, 0)) {
+            wal.append(new WalRecord.SeriesCreated(1, a));
+            wal.append(new WalRecord.Samples(List.of(new SampleEntry(1, 100, 1.0))));
+            wal.truncateBefore(150);
+        }
+        try (FileWal wal = new FileWal(tempDir, 60, 0)) {
+            wal.append(new WalRecord.SeriesCreated(2, b));
+            wal.append(new WalRecord.Samples(List.of(new SampleEntry(2, 200, 2.0))));
+            wal.append(new WalRecord.Samples(List.of(new SampleEntry(1, 300, 3.0))));
+            wal.truncateBefore(250);
+        }
+        try (FileWal wal = new FileWal(tempDir, 60, 0)) {
+            List<WalRecord> restored = new ArrayList<>();
+            wal.replay(restored::add);
+            assertEquals(List.of(
+                    new WalRecord.SeriesCreated(1, a),
+                    new WalRecord.SeriesCreated(2, b),
+                    new WalRecord.Samples(List.of(new SampleEntry(1, 300, 3.0)))), restored);
+        }
+        try (var files = assertDoesNotThrow(() -> Files.list(tempDir))) {
+            assertEquals(1, files.filter(p -> p.getFileName().toString().startsWith("checkpoint.")).count());
+        }
+    }
+
+    // После flush всего head устарел и активный сегмент: WAL переходит на новый и удаляет старый.
+    @Test
+    void fullyExpiredActiveSegmentIsRotatedAndDeleted() {
+        Labels cpu = Labels.of("cpu_usage", "host", "web-1");
+        try (FileWal wal = new FileWal(tempDir)) {
+            wal.append(new WalRecord.SeriesCreated(1, cpu));
+            wal.append(new WalRecord.Samples(List.of(new SampleEntry(1, 100, 1.0))));
+
+            wal.truncateBefore(101);
+
+            assertFalse(Files.exists(tempDir.resolve("00000001")));
+            wal.append(new WalRecord.Samples(List.of(new SampleEntry(1, 200, 2.0))));
+        }
+        try (FileWal wal = new FileWal(tempDir)) {
+            List<WalRecord> restored = new ArrayList<>();
+            wal.replay(restored::add);
+            assertEquals(List.of(
+                    new WalRecord.SeriesCreated(1, cpu),
+                    new WalRecord.Samples(List.of(new SampleEntry(1, 200, 2.0)))), restored);
+        }
+    }
+
+    @Test
+    void leftoverCheckpointTmpIgnored() throws Exception {
+        Files.write(tempDir.resolve("checkpoint.tmp"), new byte[] {1, 2, 3});
+        try (FileWal wal = new FileWal(tempDir)) {
+            List<WalRecord> restored = new ArrayList<>();
+            wal.replay(restored::add);
+            assertTrue(restored.isEmpty());
+        }
+        assertFalse(Files.exists(tempDir.resolve("checkpoint.tmp")));
+    }
+
     @Test
     void readFromExpiredPositionRequiresResync() {
         try (FileWal wal = new FileWal(tempDir, 60, 0)) {

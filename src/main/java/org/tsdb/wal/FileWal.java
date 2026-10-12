@@ -21,13 +21,17 @@ public final class FileWal implements Wal {
 
     private static final long DEFAULT_SEGMENT_SIZE = 8L * 1024 * 1024;
     private static final int MAX_PAYLOAD = 32 * 1024 * 1024;
+    private static final String CHECKPOINT_PREFIX = "checkpoint.";
+    private static final String CHECKPOINT_TMP = "checkpoint.tmp";
 
     private final Path directory;
     private final long segmentSize;
     private final long syncIntervalMs;
 
     private final NavigableMap<Long, Long> maxTimestamps = new TreeMap<>();
-    private final Set<Long> segmentsWithSeries = new HashSet<>();
+    // Все серии, которые видел журнал (checkpoint, сегменты, append). Перед удалением сегментов
+    // пишутся в checkpoint: иначе после рестарта id из Samples ничего бы не значили.
+    private final NavigableMap<Long, Labels> series = new TreeMap<>();
 
     private FileChannel channel;
     private long currentSegment;
@@ -59,6 +63,13 @@ public final class FileWal implements Wal {
 
         try {
             Files.createDirectories(directory);
+            // недописанный checkpoint: предыдущий цел, сегменты под ним не удалены
+            Files.deleteIfExists(directory.resolve(CHECKPOINT_TMP));
+            for (WalRecord record : readCheckpoint()) {
+                if (record instanceof WalRecord.SeriesCreated(long id, Labels labels)) {
+                    series.put(id, labels);
+                }
+            }
 
             List<Long> segments = listSegments();
 
@@ -101,18 +112,7 @@ public final class FileWal implements Wal {
             long offset = channel.position();
             WalPosition position = new WalPosition(currentSegment, offset);
 
-            CRC32 crc = new CRC32();
-            crc.update(payload);
-
-            ByteBuffer frame = ByteBuffer.allocate(frameSize);
-            frame.putInt(payload.length);
-            frame.putInt((int) crc.getValue());
-            frame.put(payload);
-            frame.flip();
-
-            while (frame.hasRemaining()) {
-                channel.write(frame);
-            }
+            writeFrame(channel, payload);
 
             updateMetadata(currentSegment, record);
 
@@ -145,6 +145,11 @@ public final class FileWal implements Wal {
         Objects.requireNonNull(handler);
         checkOpen();
 
+        // Сначала серии из checkpoint'а (по возрастанию id), потом все оставшиеся сегменты.
+        // SeriesCreated может прийти дважды — из checkpoint'а и из ещё не удалённого сегмента.
+        for (WalRecord record : readCheckpoint()) {
+            handler.accept(record);
+        }
         for (WalEntry entry : readAll()) {
             handler.accept(entry.record());
         }
@@ -200,29 +205,95 @@ public final class FileWal implements Wal {
     public synchronized void truncateBefore(long timestamp) {
         checkOpen();
 
-        for (long segment : new ArrayList<>(maxTimestamps.keySet())) {
-            // Активный сегмент не удаляем.
-            if (segment == currentSegment) {
-                continue;
+        try {
+            // Активный сегмент целиком устарел (например, после flush всего head) — переходим
+            // на новый, чтобы старый можно было удалить вместе с остальными.
+            if (channel.size() > 0 && maxTimestamps.get(currentSegment) < timestamp) {
+                rotate();
             }
 
-            // Создание серий не имеет timestamp.
-            // Без checkpoint такой сегмент удалять небезопасно.
-            if (segmentsWithSeries.contains(segment)) {
-                continue;
-            }
-
-            long max = maxTimestamps.get(segment);
-
-            if (max < timestamp) {
-                try {
-                    Files.deleteIfExists(segmentPath(segment));
-                    maxTimestamps.remove(segment);
-                } catch (IOException e) {
-                    throw new UncheckedIOException(
-                            "Cannot truncate WAL segment", e);
+            List<Long> expired = new ArrayList<>();
+            for (Map.Entry<Long, Long> e : maxTimestamps.entrySet()) {
+                if (e.getKey() != currentSegment && e.getValue() < timestamp) {
+                    expired.add(e.getKey());
                 }
             }
+            if (expired.isEmpty()) {
+                return;
+            }
+
+            // Сначала checkpoint со всеми сериями, только потом удаление: упадём между — ничего не потеряно.
+            writeCheckpoint();
+            for (long segment : expired) {
+                Files.deleteIfExists(segmentPath(segment));
+                maxTimestamps.remove(segment);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Cannot truncate WAL segment", e);
+        }
+    }
+
+    // wal/checkpoint.NNNNNNNN (NNNNNNNN — активный сегмент на момент записи): записи SeriesCreated
+    // по возрастанию id в том же формате, что и сегменты. Пишется во временный файл и атомарно
+    // переименовывается; старые checkpoint'ы удаляются после.
+    private void writeCheckpoint() throws IOException {
+        Path tmp = directory.resolve(CHECKPOINT_TMP);
+        try (FileChannel file = FileChannel.open(tmp, CREATE, WRITE, TRUNCATE_EXISTING)) {
+            for (Map.Entry<Long, Labels> e : series.entrySet()) {
+                writeFrame(file, encode(new WalRecord.SeriesCreated(e.getKey(), e.getValue())));
+            }
+            file.force(true);
+        }
+        Path target = checkpointPath(currentSegment);
+        Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        for (Path old : listCheckpoints()) {
+            if (!old.equals(target)) {
+                Files.deleteIfExists(old);
+            }
+        }
+    }
+
+    // Записи последнего checkpoint'а; нет checkpoint'а — пусто.
+    private List<WalRecord> readCheckpoint() {
+        try {
+            List<Path> checkpoints = listCheckpoints();
+            if (checkpoints.isEmpty()) {
+                return List.of();
+            }
+            List<WalEntry> entries = new ArrayList<>();
+            scan(checkpoints.get(checkpoints.size() - 1), -1, false, entries);
+            return entries.stream().map(WalEntry::record).toList();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Cannot read WAL checkpoint", e);
+        }
+    }
+
+    private Path checkpointPath(long segment) {
+        return directory.resolve(CHECKPOINT_PREFIX + String.format("%08d", segment));
+    }
+
+    // По возрастанию номера.
+    private List<Path> listCheckpoints() throws IOException {
+        try (Stream<Path> paths = Files.list(directory)) {
+            return paths
+                    .filter(p -> p.getFileName().toString().matches("checkpoint\\.[0-9]+"))
+                    .sorted()
+                    .toList();
+        }
+    }
+
+    private static void writeFrame(FileChannel target, byte[] payload) throws IOException {
+        CRC32 crc = new CRC32();
+        crc.update(payload);
+
+        ByteBuffer frame = ByteBuffer.allocate(8 + payload.length);
+        frame.putInt(payload.length);
+        frame.putInt((int) crc.getValue());
+        frame.put(payload);
+        frame.flip();
+
+        while (frame.hasRemaining()) {
+            target.write(frame);
         }
     }
 
@@ -298,8 +369,17 @@ public final class FileWal implements Wal {
             boolean repairTail,
             List<WalEntry> output
     ) throws IOException {
+        scan(segmentPath(segment), segment, repairTail, output);
+    }
 
-        Path path = segmentPath(segment);
+    // segment == -1 — checkpoint: метаданные сегментов не трогаем.
+    private void scan(
+            Path path,
+            long segment,
+            boolean repairTail,
+            List<WalEntry> output
+    ) throws IOException {
+
         byte[] data = Files.readAllBytes(path);
 
         int offset = 0;
@@ -364,7 +444,9 @@ public final class FileWal implements Wal {
             offset += 8 + length;
         }
 
-        maxTimestamps.putIfAbsent(segment, Long.MIN_VALUE);
+        if (segment >= 0) {
+            maxTimestamps.putIfAbsent(segment, Long.MIN_VALUE);
+        }
     }
 
     private void repair(Path path, long validLength) throws IOException {
@@ -377,8 +459,8 @@ public final class FileWal implements Wal {
     private void updateMetadata(long segment, WalRecord record) {
         maxTimestamps.putIfAbsent(segment, Long.MIN_VALUE);
 
-        if (record instanceof WalRecord.SeriesCreated) {
-            segmentsWithSeries.add(segment);
+        if (record instanceof WalRecord.SeriesCreated created) {
+            series.put(created.id(), created.labels());
         } else if (record instanceof WalRecord.Samples samples) {
             for (SampleEntry entry : samples.entries()) {
                 maxTimestamps.merge(

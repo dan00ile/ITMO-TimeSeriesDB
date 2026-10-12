@@ -2,7 +2,6 @@ package org.tsdb.head;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,6 +14,7 @@ import java.util.stream.Stream;
 import org.tsdb.encoding.AppendableChunk;
 import org.tsdb.encoding.Chunk;
 import org.tsdb.encoding.ChunkCodec;
+import org.tsdb.encoding.SampleIterator;
 import org.tsdb.index.MemInvertedIndex;
 import org.tsdb.index.MemSeriesRegistry;
 import org.tsdb.model.OutOfOrderSampleException;
@@ -136,9 +136,10 @@ public final class MemHead implements Head {
         return c.maxTime() >= start && c.minTime() <= end;
     }
 
-    // Забирает chunk'и с maxTime < upTo. Открытый chunk целиком до границы закрывается и тоже уходит:
-    // иначе серия, переставшая писать, держала бы данные в head, а WAL под ними уже удалён.
-    // Открытый chunk, пересекающий границу, остаётся в head и уйдёт в следующий блок.
+    // Ровно по границе: в снимок — все точки < upTo, в head — все >= upTo. Chunk, пересекающий
+    // границу (закрытый или открытый), разрезается на два: chunk'и сжаты потоком, поэтому точки
+    // распаковываются и упаковываются заново. Так у блока maxTime < upTo, у head minTime >= upTo,
+    // и фасад может пропускать при replay всё, что не новее последнего блока.
     @Override
     public HeadSnapshot truncate(long upTo) {
         truncateLock.writeLock().lock();
@@ -153,22 +154,34 @@ public final class MemHead implements Head {
             for (MemSeries s : ordered) {
                 s.lock.lock();
                 try {
-                    if (s.open.numSamples() > 0 && s.open.maxTime() < upTo) {
-                        s.sealed.add(s.open.seal());
-                        s.open = codec.newAppendable();
-                    }
                     List<Chunk> taken = new ArrayList<>();
-                    for (Iterator<Chunk> it = s.sealed.iterator(); it.hasNext(); ) {
-                        Chunk c = it.next();
+                    List<Chunk> kept = new ArrayList<>();
+                    for (Chunk c : s.sealed) {
                         if (c.maxTime() < upTo) {
                             taken.add(c);
-                            it.remove();
-                            snapMin = Math.min(snapMin, c.minTime());
-                            snapMax = Math.max(snapMax, c.maxTime());
+                        } else if (c.minTime() >= upTo) {
+                            kept.add(c);
                         } else {
-                            headMin = Math.min(headMin, c.minTime());
-                            headMax = Math.max(headMax, c.maxTime());
+                            AppendableChunk[] parts = split(c, upTo);
+                            taken.add(parts[0].seal());
+                            kept.add(parts[1].seal());
                         }
+                    }
+                    if (s.open.numSamples() > 0 && s.open.minTime() < upTo) {
+                        AppendableChunk[] parts = split(s.open, upTo);
+                        taken.add(parts[0].seal());
+                        s.open = parts[1]; // остаётся открытым; если пуст — просто новый chunk
+                    }
+                    s.sealed.clear();
+                    s.sealed.addAll(kept);
+
+                    for (Chunk c : taken) {
+                        snapMin = Math.min(snapMin, c.minTime());
+                        snapMax = Math.max(snapMax, c.maxTime());
+                    }
+                    for (Chunk c : kept) {
+                        headMin = Math.min(headMin, c.minTime());
+                        headMax = Math.max(headMax, c.maxTime());
                     }
                     if (s.open.numSamples() > 0) {
                         headMin = Math.min(headMin, s.open.minTime());
@@ -187,6 +200,18 @@ public final class MemHead implements Head {
         } finally {
             truncateLock.writeLock().unlock();
         }
+    }
+
+    // Точки chunk'а до upTo — в первый новый chunk, остальные — во второй. Части не больше исходного,
+    // поэтому в лимит chunk'а укладываются.
+    private AppendableChunk[] split(Chunk chunk, long upTo) {
+        AppendableChunk before = codec.newAppendable();
+        AppendableChunk after = codec.newAppendable();
+        SampleIterator it = chunk.iterator();
+        while (it.next()) {
+            (it.timestamp() < upTo ? before : after).append(it.timestamp(), it.value());
+        }
+        return new AppendableChunk[] {before, after};
     }
 
     // Пустой снимок: minTime == Long.MAX_VALUE, maxTime == Long.MIN_VALUE.

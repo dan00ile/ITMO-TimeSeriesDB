@@ -84,6 +84,31 @@ class LocalTimeSeriesDBTest {
         }
     }
 
+    // У web-1 chunk [800..2400] пересекает границу 1000, у web-2 весь chunk [950, 990] уходит в блок.
+    // Если бы head отдал в блок только web-2, точки web-1 800 и 900 остались бы в памяти, а replay
+    // пропустил бы их как «не новее последнего блока» (990) — и они пропали бы после рестарта.
+    @Test
+    void chunkCrossingBlockBoundarySurvivesRestart() {
+        List<Sample> web1 = List.of(new Sample(800, 1), new Sample(900, 2), new Sample(1_100, 3), new Sample(2_400, 4));
+        List<Sample> web2 = List.of(new Sample(950, 5), new Sample(990, 6));
+        try (LocalTimeSeriesDB db = open()) {
+            db.append(cpu("web-1"), 800, 1);
+            db.append(cpu("web-1"), 900, 2);
+            db.append(cpu("web-2"), 950, 5);
+            db.append(cpu("web-2"), 990, 6);
+            db.append(cpu("web-1"), 1_100, 3);
+            db.append(cpu("web-1"), 2_400, 4);
+            db.runMaintenance(); // head покрывает 1600 мс > 1.5 окна — окно [0, 1000) уходит в блок
+
+            assertEquals(1, db.stats().numBlocks());
+            assertEquals(2, db.stats().headSamples(), "в head только точки >= 1000");
+        }
+        try (LocalTimeSeriesDB db = open()) {
+            assertEquals(web1, samplesOf(db.query(ALL), cpu("web-1")));
+            assertEquals(web2, samplesOf(db.query(ALL), cpu("web-2")));
+        }
+    }
+
     @Test
     void dataSurvivesRestartViaWal() {
         List<Sample> web1 = regular15s(1_000, 10);
@@ -274,9 +299,7 @@ class LocalTimeSeriesDBTest {
             db.runMaintenance();
 
             assertEquals(1, db.stats().numBlocks());
-            // chunk'и по 4 точки: [0..300] и [400..700] ушли в блок, [800..1100] пересекает границу 1000
-            // и остаётся в head целиком — head режет по chunk'ам, не по точкам
-            assertEquals(22, db.stats().headSamples(), "в блок ушли chunk'и окна [0, 1000)");
+            assertEquals(20, db.stats().headSamples(), "в блок ушло окно [0, 1000)");
             assertEquals(samples, samplesOf(db.query(ALL), cpu("web-1")));
         }
     }

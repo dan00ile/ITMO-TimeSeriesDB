@@ -452,9 +452,8 @@ public final class LocalTimeSeriesDB implements TimeSeriesDB {
         }
         Path tmp = paths.tmpDir().resolve(newUlid());
         publishBlock(tmp, blockWriter.write(snapshot, tmp));
-        // Head режет по chunk'ам: chunk, пересекающий upTo, остаётся в памяти вместе с точками < upTo.
-        // Их записи в WAL нужны до следующего сброса, поэтому граница — самая старая точка head.
-        wal.truncateBefore(Math.min(upTo, head.minTime()));
+        // head.truncate режет точно по upTo: всё, что раньше, уже в блоке
+        wal.truncateBefore(upTo);
     }
 
     // «Сейчас» — самая свежая точка в БД, а не часы, как в Prometheus: импорт старых данных не удалится сразу.

@@ -164,13 +164,41 @@ class HeadTest {
     }
 
     @Test
-    void openChunkCrossingBoundaryStays() {
+    void openChunkCrossingBoundaryIsSplit() {
         MemHead head = head(10);
         long id = register(head, WEB1);
         head.append(id, 10, 1);
         head.append(id, 60, 2);
-        assertEquals(0, head.truncate(50).series().count());
-        assertEquals(10, head.minTime());
+
+        HeadSnapshot snap = head.truncate(50);
+        List<Chunk> taken = snap.series().toList().get(0).chunks();
+        assertEquals(List.of(new Sample(10, 1)), samplesOf(taken.get(0)));
+        assertEquals(10, snap.maxTime());
+        assertEquals(60, head.minTime());
+
+        head.append(id, 70, 3); // хвост остался открытым chunk'ом — дописывается дальше
+        List<Chunk> rest = head.chunks(id, Long.MIN_VALUE, Long.MAX_VALUE);
+        assertEquals(1, rest.size());
+        assertEquals(List.of(new Sample(60, 2), new Sample(70, 3)), samplesOf(rest.get(0)));
+        assertThrows(OutOfOrderSampleException.class, () -> head.append(id, 65, 4));
+    }
+
+    @Test
+    void sealedChunkCrossingBoundaryIsSplit() {
+        MemHead head = head(4);
+        long id = register(head, WEB1);
+        for (int i = 1; i <= 6; i++) {
+            head.append(id, i * 10L, i); // закрытый [10..40], открытый [50, 60]
+        }
+
+        HeadSnapshot snap = head.truncate(25);
+        List<Chunk> taken = snap.series().toList().get(0).chunks();
+        assertEquals(1, taken.size());
+        assertEquals(List.of(new Sample(10, 1), new Sample(20, 2)), samplesOf(taken.get(0)));
+        assertEquals(30, head.minTime());
+        assertEquals(List.of(new Sample(30, 3), new Sample(40, 4), new Sample(50, 5), new Sample(60, 6)),
+                head.chunks(id, Long.MIN_VALUE, Long.MAX_VALUE).stream()
+                        .flatMap(c -> samplesOf(c).stream()).toList());
     }
 
     @Test
