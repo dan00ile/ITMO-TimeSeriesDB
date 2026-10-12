@@ -3,6 +3,9 @@ package org.tsdb;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 import org.tsdb.bench.MetricsGenerator;
@@ -22,6 +25,7 @@ import org.tsdb.model.SeriesResult;
 public final class Demo {
     private static final long MINUTE = 60_000;
     private static final long START = 1_760_000_000_000L;
+    private static final DateTimeFormatter HH_MM = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneOffset.UTC);
 
     private Demo() {
     }
@@ -44,18 +48,26 @@ public final class Demo {
             System.out.printf("%.2f bytes/point vs 16 raw — compression %.1fx%n",
                     stats.diskBytes() / (double) points, points * 16.0 / stats.diskBytes());
 
-            long end = gen.nextTimestamp() - 1;
+            // последний час данных: [end - 60 мин, end), окна по 15 минут; ts точки ответа — начало окна
+            long end = gen.nextTimestamp();
+            long start = end - 60 * MINUTE;
             Query query = Query.range(List.of(
                             new Matcher.Eq("__name__", "cpu_usage"),
                             new Matcher.Regex("host", "host-000[0-2]")),
-                    end - 60 * MINUTE + 1, end).aggregate(Aggregation.AVG, List.of("host"), 15 * MINUTE);
+                    start, end - 1).aggregate(Aggregation.AVG, List.of("host"), 15 * MINUTE);
             QueryResult result = db.query(query);
             System.out.println();
-            System.out.println("avg cpu_usage by host, last hour, 15 min windows:");
+            System.out.println("avg cpu_usage by host, last hour of data, 15 min windows (UTC):");
+            StringBuilder header = new StringBuilder(String.format("  %-22s", ""));
+            for (long w = start; w < end; w += 15 * MINUTE) {
+                header.append(String.format("  %s–%s", HH_MM.format(Instant.ofEpochMilli(w)),
+                        HH_MM.format(Instant.ofEpochMilli(w + 15 * MINUTE))));
+            }
+            System.out.println(header);
             for (SeriesResult s : result.series()) {
                 StringBuilder line = new StringBuilder(String.format("  %-22s", s.labels().canonical()));
                 for (Sample p : s.samples()) {
-                    line.append(String.format("  %+4d min: %.3f", (p.timestamp() - end) / MINUTE, p.value()));
+                    line.append(String.format("  %11.3f", p.value()));
                 }
                 System.out.println(line);
             }
