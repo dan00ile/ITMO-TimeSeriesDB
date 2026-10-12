@@ -76,6 +76,18 @@ class HeadTest {
         assertThrows(OutOfOrderSampleException.class, () -> head.append(id, 1_500, 2));
     }
 
+    // Порядок проверяет head до chunk.append: chunk не знает seriesId, в исключении нужен настоящий.
+    @Test
+    void outOfOrderReportsRealSeriesId() {
+        MemHead head = head(2);
+        register(head, Labels.of("cpu_usage", "host", "web-0"));
+        long id = register(head, WEB1); // id = 2, не 0 и не 1
+        head.append(id, 1_000, 1);
+        head.append(id, 2_000, 1); // chunk закрыт — проверка идёт по lastTs серии, не по chunk'у
+        OutOfOrderSampleException e = assertThrows(OutOfOrderSampleException.class, () -> head.append(id, 1_500, 2));
+        assertEquals("series 2: ts 1500 <= last 2000", e.getMessage());
+    }
+
     @Test
     void unknownSeriesRejected() {
         assertThrows(IllegalArgumentException.class, () -> head(4).append(42, 1, 1));
