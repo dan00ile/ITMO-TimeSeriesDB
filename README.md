@@ -24,6 +24,170 @@
 
 A — Storage, B — Index & Query, C — API & Infra.
 
+## Лаба 2
+
+БД — библиотека внутри Java-процесса: открыл каталог, пишешь, читаешь, закрыл, открыл снова — данные
+на месте. Сети пока нет (она в лабе 3).
+
+### Компоненты
+
+```mermaid
+flowchart TB
+    user(["Код пользователя / тесты / Demo"]) --> db
+
+    subgraph facade["Фасад · C"]
+        db["LocalTimeSeriesDB<br/>append · query · flush · compact"]
+    end
+
+    db -->|"1. сначала журнал"| wal
+    db -->|"2. потом память"| head
+    db -->|"запрос"| engine
+    db -->|"сброс / компакция / retention"| blocks
+
+    subgraph memory["Память"]
+        head["MemHead · B<br/>свежие данные ~2 ч"]
+        reg["MemSeriesRegistry · B<br/>labels ↔ id"]
+        idx["MemInvertedIndex · B<br/>лейбл → id серий"]
+        head --- reg
+        head --- idx
+    end
+
+    subgraph disk["Диск"]
+        wal[("FileWal · A<br/>wal/")]
+        blocks[("FileBlockWriter / Reader · A<br/>blocks/")]
+    end
+
+    engine["DefaultQueryEngine · B<br/>select → chunks → агрегация"]
+    engine -->|"Queryable"| head
+    engine -->|"Queryable"| blocks
+
+    gorilla["GorillaCodec · A<br/>сжатие ~1-6 байт/точку"]
+    head -.->|"chunk'и по 120 точек"| gorilla
+    blocks -.-> gorilla
+```
+
+Главная идея: `Head` и `Block` реализуют один интерфейс `Queryable`, поэтому `QueryEngine` читает
+память и диск одинаково и не знает, где лежат данные. В лабе 5 так же подключится удалённый шард.
+
+### Путь записи
+
+```mermaid
+sequenceDiagram
+    participant U as Клиент
+    participant DB as LocalTimeSeriesDB
+    participant W as WAL (диск)
+    participant R as Registry + Index
+    participant H as MemHead
+
+    U->>DB: append(cpu_usage{host="web-1"}, ts, 0.42)
+    DB->>DB: проверка порядка: ts > последней точки серии?
+    DB->>R: getOrCreate(labels)
+    alt новая серия
+        R-->>DB: id = 7
+        DB->>W: SeriesCreated(7, labels)
+        DB->>R: index.add(7, labels)
+    else серия уже есть
+        R-->>DB: id = 7
+    end
+    DB->>W: Samples [(7, ts, 0.42)]
+    Note over W: fsync раз в 100 мс<br/>(или на каждую запись)
+    DB->>H: append(7, ts, 0.42)
+    Note over H: открытый Gorilla-chunk серии +1 точка<br/>120 точек → chunk закрывается, открывается новый
+```
+
+Порядок «журнал → память» гарантирует: всё, что попало в память, уже есть на диске в WAL и переживёт падение.
+
+### Путь чтения
+
+Запрос: `avg cpu_usage{host=~"web-.*"} by (host)` за последний час.
+
+```mermaid
+flowchart LR
+    q["Query<br/>matchers + [start, end]<br/>+ AVG by host"] --> pick{"Какие источники<br/>пересекают<br/>[start, end]?"}
+    pick -->|"нет"| skip["Блоки 08-10, 10-12<br/>даже не открываются"]
+    pick -->|"да"| src["Блок 12-14 и Head"]
+    src --> sel["select(matchers)<br/>инвертированный индекс:<br/>пересечение списков id"]
+    sel --> lab["labels(id)<br/>склейка серий из разных<br/>источников по Labels"]
+    lab --> ch["chunks(id, start, end)<br/>только chunk'и,<br/>пересекающие диапазон"]
+    ch --> dec["Gorilla: распаковка<br/>стоп на ts > end"]
+    dec --> agg["Группировка по host<br/>Aggregator AVG на окно"]
+    agg --> res["QueryResult<br/>host=web-1 → 0.43<br/>host=web-2 → 0.79"]
+```
+
+Как индекс находит серии (`select`):
+
+```
+__name__="cpu_usage"  → [1, 2, 3, 4]
+host=~"web-.*"        → union([1, 2, 5], [3]) = [1, 2, 3, 5]
+                         ─────────────────────────────────────
+пересечение           → [1, 2, 3]        ← chunk'и остальных серий не читаются вовсе
+```
+
+### Жизнь данных: память → блок → компакция → удаление
+
+```mermaid
+sequenceDiagram
+    participant BG as Фоновая задача (раз в 60 с) / flush()
+    participant H as MemHead
+    participant B as blocks/
+    participant W as WAL
+
+    BG->>H: head покрывает > 1.5 окна (окно = 2 ч)?
+    BG->>H: truncate(upTo)
+    H-->>BG: снимок: все точки < upTo
+    Note over H: chunk, пересекающий upTo,<br/>разрезается на две части
+    BG->>B: write → tmp/ULID, затем атомарный rename в blocks/ULID
+    BG->>W: truncateBefore(upTo)
+    Note over W: checkpoint серий, потом удаление<br/>сегментов, где все точки < upTo
+    BG->>B: компакция: 3 блока одного уровня → 1 блок
+    BG->>B: retention: блоки старше 30 дней → rm -r
+```
+
+Разрезка chunk'а на границе блока (`upTo = 1000`):
+
+```
+серия web-1:   [100 ··· 400]  [500 ··· 900]  [950 ··· 1100]  [1200 ··· 1500]
+                    │              │           │       │            │
+                 в блок         в блок      [950]   [1100]      остаётся
+                                            в блок  в head      в head
+```
+
+Gorilla сжимает потоком, байты из середины chunk'а сами по себе ничего не значат, поэтому
+пересекающий chunk распаковывается и упаковывается заново двумя кусками. Итог — строгое правило:
+**в блоке всё < upTo, в head всё ≥ upTo**. На нём держится восстановление после падения.
+
+### Что лежит на диске
+
+```
+data/
+├── wal/                          журнал: страховка для данных из памяти
+│   ├── 00000007                  сегменты по 8 МБ: [длина][crc32][запись]...
+│   ├── 00000008                  ← активный, сюда дописываются записи
+│   └── checkpoint.00000008       все серии (id + labels) — нужен после удаления старых сегментов
+├── blocks/                       неизменяемые блоки, каждый — окно времени
+│   ├── 01M4RKMBW0EV3J0TXWB8Z7NDDH/
+│   │   ├── meta.json             minTime, maxTime, число серий/точек, уровень компакции
+│   │   ├── index                 серии блока и ссылки на их chunk'и
+│   │   └── chunks.bin            Gorilla-chunk'и подряд
+│   └── 01M4RM2WZ0PA3VJB2YNQ0KJ047/
+└── tmp/                          блок пишется сюда и атомарно переносится в blocks/
+```
+
+### Восстановление после падения
+
+```mermaid
+flowchart LR
+    start(["open(dataDir)"]) --> clean["Удалить tmp/<br/>(недописанные блоки)"]
+    clean --> load["Открыть блоки из blocks/<br/>→ blocksMaxTime"]
+    load --> cp["WAL: серии из checkpoint<br/>→ registry.restore(id, labels)"]
+    cp --> seg["WAL: оставшиеся сегменты по порядку<br/>битый хвост → обрезать"]
+    seg --> f{"ts точки ≤ blocksMaxTime?"}
+    f -->|"да — уже в блоке"| drop["пропустить"]
+    f -->|"нет"| app["head.append"]
+    app --> ready(["БД готова, данные на месте"])
+    drop --> ready
+```
+
 ## Демо и бенчмарк
 
 ```
@@ -33,7 +197,9 @@ A — Storage, B — Index & Query, C — API & Infra.
 ```
 
 Данные — `org.tsdb.bench.MetricsGenerator`: серии `cpu_usage{host, core}`, значение — случайное
-блуждание в [0, 1] с шагом до ±0.02 и округлением до 0.01. Для Gorilla это неудобные данные:
+блуждание в [0, 1] с шагом до ±0.02 и округлением до 0.01. 
+
+Для Gorilla это неудобные данные:
 значение меняется почти в каждой точке, а десятичные дроби после XOR дают много значащих бит.
 Сценарий прогоняется 3 раза (2 — прогрев JIT), цифры по последнему прогону.
 
