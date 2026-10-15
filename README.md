@@ -32,6 +32,7 @@ A — Storage, B — Index & Query, C — API & Infra.
 ### Компоненты
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart TB
     user(["Код пользователя / тесты / Demo"]) --> db
 
@@ -102,6 +103,7 @@ sequenceDiagram
 Запрос: `avg cpu_usage{host=~"web-.*"} by (host)` за последний час.
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart LR
     q["Query<br/>matchers + [start, end]<br/>+ AVG by host"] --> pick{"Какие источники<br/>пересекают<br/>[start, end]?"}
     pick -->|"нет"| skip["Блоки 08-10, 10-12<br/>даже не открываются"]
@@ -176,6 +178,7 @@ data/
 ### Восстановление после падения
 
 ```mermaid
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
 flowchart LR
     start(["open(dataDir)"]) --> clean["Удалить tmp/<br/>(недописанные блоки)"]
     clean --> load["Открыть блоки из blocks/<br/>→ blocksMaxTime"]
