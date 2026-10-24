@@ -15,7 +15,6 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,7 +35,6 @@ class TimeSeriesDBContractTest {
     Path dir;
 
     @Test
-    @Disabled("lab2")
     @DisplayName("append then query returns sample")
     void appendThenQueryReturnsSample() {
         try (TimeSeriesDB db = TimeSeriesDB.open(DbOptions.defaults(dir))) {
@@ -51,7 +49,6 @@ class TimeSeriesDBContractTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("query outside the range returns nothing")
     void queryOutsideRangeReturnsEmpty() {
         try (TimeSeriesDB db = TimeSeriesDB.open(DbOptions.defaults(dir))) {
@@ -62,7 +59,6 @@ class TimeSeriesDBContractTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("data written before a crash comes back from the WAL")
     void dataSurvivesRestartViaWal() {
         Labels labels = cpu("web-1");
@@ -78,7 +74,6 @@ class TimeSeriesDBContractTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("flush moves head to a block on disk and queries still see the data")
     void flushCreatesBlockOnDiskAndQueryStillWorks() throws Exception {
         Labels labels = cpu("web-1");
@@ -99,7 +94,6 @@ class TimeSeriesDBContractTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("out-of-order sample is rejected")
     void outOfOrderSampleRejected() {
         try (TimeSeriesDB db = TimeSeriesDB.open(DbOptions.defaults(dir))) {
@@ -113,7 +107,6 @@ class TimeSeriesDBContractTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("avg by host over a range")
     void avgByHostOverRange() {
         try (TimeSeriesDB db = TimeSeriesDB.open(DbOptions.defaults(dir))) {
@@ -132,7 +125,6 @@ class TimeSeriesDBContractTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("labelNames and labelValues list everything appended")
     void labelNamesAndValuesListEverythingAppended() {
         try (TimeSeriesDB db = TimeSeriesDB.open(DbOptions.defaults(dir))) {
@@ -146,7 +138,6 @@ class TimeSeriesDBContractTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("a closed database rejects further calls")
     void closedDbRejectsCalls() {
         TimeSeriesDB db = TimeSeriesDB.open(DbOptions.defaults(dir));

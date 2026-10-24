@@ -17,7 +17,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -42,7 +41,6 @@ class TimeSeriesDBIntegrationTest {
     Path dir;
 
     @Test
-    @Disabled("lab2")
     @DisplayName("data written across several blocks is read back as one series")
     void seriesIsStitchedFromBlocksAndHead() {
         try (TimeSeriesDB db = TimeSeriesDB.open(testOptions(dir))) {
@@ -63,7 +61,6 @@ class TimeSeriesDBIntegrationTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("compaction merges blocks without changing query results")
     void compactionDoesNotChangeQueryResults() {
         try (TimeSeriesDB db = TimeSeriesDB.open(testOptions(dir))) {
@@ -82,7 +79,6 @@ class TimeSeriesDBIntegrationTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("deleteBefore drops old blocks and keeps recent data")
     void deleteBeforeDropsOldBlocksOnly() {
         try (TimeSeriesDB db = TimeSeriesDB.open(testOptions(dir))) {
@@ -102,7 +98,6 @@ class TimeSeriesDBIntegrationTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("appendBatch is equivalent to append in a loop")
     void appendBatchEqualsIndividualAppends() {
         Labels labels = cpu("web-1");
@@ -120,7 +115,6 @@ class TimeSeriesDBIntegrationTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("avg by host over a range spanning blocks and head")
     void avgByHostAcrossBlocksAndHead() {
         try (TimeSeriesDB db = TimeSeriesDB.open(testOptions(dir))) {
@@ -143,7 +137,6 @@ class TimeSeriesDBIntegrationTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("concurrent appends from many threads lose nothing")
     void concurrentAppendsFromManyThreads() throws Exception {
         int perSeries = 200;
@@ -169,7 +162,6 @@ class TimeSeriesDBIntegrationTest {
     }
 
     @Test
-    @Disabled("lab2")
     @DisplayName("stats reflect what was written")
     void statsReflectWrittenData() {
         try (TimeSeriesDB db = TimeSeriesDB.open(testOptions(dir))) {
