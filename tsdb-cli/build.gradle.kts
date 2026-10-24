@@ -4,7 +4,7 @@ plugins {
 }
 
 dependencies {
-    // tsdb-core — ради парсера селекторов org.tsdb.model.SelectorParser
+    // tsdb-core — ради SelectorParser и генератора данных org.tsdb.bench.MetricsGenerator
     implementation(project(":tsdb-core"))
     implementation(project(":tsdb-proto"))
     implementation(libs.grpc.netty.shaded)
