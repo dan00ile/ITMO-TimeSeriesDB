@@ -8,6 +8,100 @@
 ./gradlew build
 ```
 
+## Quick start
+
+Нужны Docker с `docker compose` для сервера и JDK 21 для сборки без Docker.
+
+```
+cd docker
+docker compose up -d --build            # собрать образ и запустить сервер на localhost:2222
+docker compose ps                       # STATUS: Up (healthy)
+grpcurl -plaintext localhost:2222 list  # tsdb.v1.TimeSeriesService, grpc.health.v1.Health, ...
+```
+
+Остановить: `docker compose stop` (сервер дописывает WAL и закрывает блоки). Данные лежат в томе
+`tsdb-data` и переживают перезапуски, `docker compose down -v` удаляет их вместе с томом.
+
+Если `grpcurl` не установлен, можно взять образ: `docker run --rm --network host fullstorydev/grpcurl
+-plaintext localhost:2222 list` (на macOS и Windows вместо `localhost` — `host.docker.internal`).
+
+Без Docker:
+
+```
+./gradlew :tsdb-server:installDist
+TSDB_DATA_DIR=./data tsdb-server/build/install/tsdb-server/bin/tsdb-server
+```
+
+| Модуль | Что внутри |
+|---|---|
+| `tsdb-core` | движок БД: все пакеты из таблицы ниже |
+| `tsdb-proto` | `tsdb.proto` и сгенерированные из него классы и gRPC-stub'ы |
+| `tsdb-server` | gRPC-сервер поверх фасада, `ServerConfig` |
+| `tsdb-cli` | клиент для записи, чтения и нагрузки |
+| `buildSrc` | общие настройки Gradle для всех модулей (`tsdb.java-conventions`) |
+| `docker/` | `Dockerfile`, `docker-compose.yml` |
+
+Сервер настраивается переменными окружения, в compose — блок `environment`:
+
+| Переменная | По умолчанию | Что задаёт |
+|---|---|---|
+| `TSDB_PORT` | `2222` | порт gRPC |
+| `TSDB_DATA_DIR` | `data`, в образе `/data` | каталог с WAL и блоками |
+| `TSDB_BLOCK_RANGE_MS` | `7200000` (2 ч) | окно блока |
+| `TSDB_RETENTION_MS` | `2592000000` (30 дней) | срок хранения блоков, `0` — хранить вечно |
+| `TSDB_WAL_SYNC_INTERVAL_MS` | `100` | fsync WAL раз в N мс, `0` — на каждую запись |
+| `TSDB_COMPACTION_INTERVAL_MS` | `60000` | период фонового сброса head, компакции и retention, `0` — выключено |
+| `JAVA_OPTS` | в образе `-XX:MaxRAMPercentage=75` | флаги JVM |
+
+## Example usage
+
+Через `grpcurl` (reflection на сервере включён, `.proto` передавать не нужно):
+
+```
+# записать две точки серии cpu_usage{host="web-1"}
+grpcurl -plaintext -d '{"series":[{
+    "labels":[{"name":"__name__","value":"cpu_usage"},{"name":"host","value":"web-1"}],
+    "samples":[{"timestamp_ms":1760000000000,"value":0.41},{"timestamp_ms":1760000015000,"value":0.43}]}]}' \
+  localhost:2222 tsdb.v1.TimeSeriesService/Write
+# {"accepted": "2"}
+
+# сырые точки
+grpcurl -plaintext -d '{"matchers":[{"name":"__name__","value":"cpu_usage"}],
+    "start_ms":0,"end_ms":9999999999999}' \
+  localhost:2222 tsdb.v1.TimeSeriesService/Query
+
+# среднее по каждому host в окнах по минуте; type: EQ (по умолчанию), NEQ, RE, NRE
+grpcurl -plaintext -d '{"matchers":[{"name":"__name__","value":"cpu_usage"},{"type":"RE","name":"host","value":"web-.*"}],
+    "start_ms":1760000000000,"end_ms":1760000060000,"aggregation":"AVG","group_by":["host"],"step_ms":60000}' \
+  localhost:2222 tsdb.v1.TimeSeriesService/Query
+
+grpcurl -plaintext localhost:2222 tsdb.v1.TimeSeriesService/LabelNames
+grpcurl -plaintext -d '{"name":"host"}' localhost:2222 tsdb.v1.TimeSeriesService/LabelValues
+grpcurl -plaintext localhost:2222 tsdb.v1.TimeSeriesService/GetStats   # серии, блоки, точки в head, байты на диске
+grpcurl -plaintext localhost:2222 tsdb.v1.TimeSeriesService/Flush      # сбросить head в блок
+```
+
+Через CLI:
+
+```
+./gradlew :tsdb-cli:installDist
+alias tsdb-cli=tsdb-cli/build/install/tsdb-cli/bin/tsdb-cli
+
+tsdb-cli --addr localhost:2222 write 'cpu_usage{host="web-1"}' 0.42     # ts = сейчас
+tsdb-cli query 'cpu_usage{host=~"web-.*"}' --start -1h --agg avg --by host --step 1m
+tsdb-cli load --series 1000 --interval 15s --duration 10m                # генератор нагрузки
+tsdb-cli stats
+```
+
+Подтверждённые записи переживают `kill -9`: после рестарта сервер поднимает их из WAL.
+
+```
+cd docker
+docker compose kill          # SIGKILL, shutdown hook не успевает
+docker compose up -d
+tsdb-cli query 'cpu_usage{host=~"web-.*"}' --start -1h --agg avg --by host   # данные на месте
+```
+
 ## Пакеты и владельцы
 
 | Пакет | Что внутри | Владелец |

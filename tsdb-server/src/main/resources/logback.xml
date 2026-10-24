@@ -1,0 +1,15 @@
+<configuration>
+    <!-- в контейнере логи читает docker logs, поэтому только консоль -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- без этого netty и grpc сыплют DEBUG-сообщениями -->
+    <logger name="io.grpc" level="INFO"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

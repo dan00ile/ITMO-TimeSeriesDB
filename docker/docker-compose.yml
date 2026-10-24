@@ -1,0 +1,25 @@
+# Один узел TSDB. Запуск из каталога docker/: docker compose up -d --build
+# В лабах 4-5 рядом появятся docker-compose.replica.yml и docker-compose.shard.yml.
+name: tsdb
+
+services:
+  tsdb:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: tsdb-server:latest
+    ports:
+      - "2222:2222"
+    environment:
+      TSDB_BLOCK_RANGE_MS: "7200000"
+      TSDB_RETENTION_MS: "2592000000"
+      TSDB_WAL_SYNC_INTERVAL_MS: "100"
+      TSDB_COMPACTION_INTERVAL_MS: "60000"
+    volumes:
+      - tsdb-data:/data
+    # сервер укладывается в 10 с на graceful shutdown, 15 с — с запасом до SIGKILL
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+volumes:
+  tsdb-data:
