@@ -1,14 +1,14 @@
 # Образ сервера TSDB. Собирать из корня репозитория:
 #   docker build -f docker/Dockerfile -t tsdb-server .
 
-# Этап 1: JDK + Gradle собирают tsdb-server/build/install/tsdb-server (bin/ + lib/)
+# Этап 1: JDK + Gradle собирают tsdb-server и tsdb-cli (build/install/*: bin/ + lib/)
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY . .
 # при сборке с Windows бит исполняемости у gradlew может не доехать — не полагаемся на него;
 # кэш ~/.gradle переживает пересборки образа, зависимости не качаются каждый раз заново
 RUN --mount=type=cache,target=/root/.gradle \
-    sh ./gradlew :tsdb-server:installDist --no-daemon
+    sh ./gradlew :tsdb-server:installDist :tsdb-cli:installDist --no-daemon
 
 # Этап 2: только JRE и результат сборки, без исходников и Gradle
 FROM eclipse-temurin:21-jre
@@ -25,6 +25,8 @@ RUN groupadd --system tsdb \
 
 WORKDIR /app
 COPY --from=build /src/tsdb-server/build/install/tsdb-server /app
+# CLI — для генератора нагрузки (loadgen в docker-compose.grafana.yml) и docker compose exec
+COPY --from=build /src/tsdb-cli/build/install/tsdb-cli /cli
 
 ENV TSDB_PORT=2222 \
     TSDB_DATA_DIR=/data \

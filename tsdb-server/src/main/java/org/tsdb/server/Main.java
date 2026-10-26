@@ -13,6 +13,7 @@ import io.grpc.health.v1.HealthCheckResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.tsdb.db.TimeSeriesDB;
+import org.tsdb.server.prometheus.PrometheusHttpServer;
 
 public final class Main {
 
@@ -55,6 +56,15 @@ public final class Main {
         LOG.info("tsdb-server started on port {}, {}",
                 server.getPort(), cfg);
 
+        // HTTP для Prometheus remote read — включается TSDB_HTTP_PORT
+        PrometheusHttpServer http = cfg.httpPort() > 0
+                ? PrometheusHttpServer.start(cfg.httpPort(), db)
+                : null;
+        if (http != null) {
+            LOG.info("Prometheus remote read on http://0.0.0.0:{}{}",
+                    http.port(), PrometheusHttpServer.READ_PATH);
+        }
+
         // Обработка остановки приложения
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
 
@@ -65,6 +75,9 @@ public final class Main {
 
             // Перестаём принимать новые запросы
             server.shutdown();
+            if (http != null) {
+                http.close();
+            }
 
             try {
                 // Даём текущим запросам завершиться

@@ -1,0 +1,53 @@
+// Подмножество протокола remote read Prometheus (prompb/remote.proto + prompb/types.proto):
+// только то, что нужно, чтобы Prometheus читал данные из нашей БД. Номера полей — как в оригинале,
+// иначе бинарный формат не совпадёт. Остальные поля (hints, chunked-ответы) Prometheus шлёт, а
+// protobuf их просто пропускает.
+// https://github.com/prometheus/prometheus/blob/main/prompb/remote.proto
+syntax = "proto3";
+
+package prometheus;
+
+option java_package = "org.tsdb.proto.prometheus";
+option java_multiple_files = true;
+
+message ReadRequest {
+  repeated Query queries = 1;
+}
+
+message Query {
+  int64 start_timestamp_ms = 1;
+  int64 end_timestamp_ms   = 2;
+  repeated LabelMatcher matchers = 3;
+}
+
+message LabelMatcher {
+  enum Type { EQ = 0; NEQ = 1; RE = 2; NRE = 3; }
+  Type   type  = 1;
+  string name  = 2;
+  string value = 3;
+}
+
+// Ответ: по одному QueryResult на каждый Query запроса, в том же порядке.
+message ReadResponse {
+  repeated QueryResult results = 1;
+}
+
+message QueryResult {
+  repeated TimeSeries timeseries = 1;
+}
+
+message TimeSeries {
+  repeated Label  labels  = 1;
+  repeated Sample samples = 2;
+}
+
+message Label {
+  string name  = 1;
+  string value = 2;
+}
+
+// Внимание: у Prometheus сначала value, потом timestamp — не как в tsdb.proto.
+message Sample {
+  double value     = 1;
+  int64  timestamp = 2;
+}

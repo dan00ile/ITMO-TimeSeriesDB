@@ -1,0 +1,11 @@
+# Prometheus здесь ничего не собирает: он только исполняет PromQL для Grafana,
+# а сырые точки читает из нашей БД по remote read.
+global:
+  scrape_interval: 1m
+  evaluation_interval: 1m
+
+remote_read:
+  - url: http://tsdb:9201/api/v1/read
+    # своих данных у Prometheus нет — спрашивать нас и за последние минуты тоже
+    read_recent: true
+    remote_timeout: 30s

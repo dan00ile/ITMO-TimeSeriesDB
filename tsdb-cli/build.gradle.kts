@@ -9,8 +9,13 @@ dependencies {
     implementation(project(":tsdb-proto"))
     implementation(libs.grpc.netty.shaded)
     implementation(libs.picocli)
+
+    // сквозные тесты: команды CLI против настоящего TimeSeriesServiceImpl в той же JVM
+    testImplementation(project(":tsdb-server"))
+    testImplementation(libs.grpc.inprocess)
 }
 
 application {
     mainClass = "org.tsdb.cli.Main"
+    applicationDefaultJvmArgs = listOf("-Dstdout.encoding=UTF-8", "-Duser.language=en", "-Duser.country=US")
 }

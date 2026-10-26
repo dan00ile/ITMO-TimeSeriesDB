@@ -93,6 +93,21 @@ tsdb-cli load --series 1000 --interval 15s --duration 10m                # ге�
 tsdb-cli stats
 ```
 
+Ещё полезное для демо:
+
+```
+tsdb-cli load --series 1000 --duration 6h --fast   # точки за последние 6 часов, без пауз (~10 с)
+tsdb-cli load --series 200 --duration 0            # писать в реальном времени до Ctrl-C
+tsdb-cli labels                                    # имена лейблов
+tsdb-cli labels host                               # значения лейбла host
+tsdb-cli flush                                     # сбросить head в блок на диске
+tsdb-cli help query                                # все опции команды
+```
+
+Адрес можно задать один раз: `export TSDB_ADDR=localhost:2222`. Ошибки сервера печатаются одной
+строкой (`error: INVALID_ARGUMENT: ...`) с кодом выхода 2; `write` возвращает 1, если точку отклонили
+как out-of-order.
+
 Подтверждённые записи переживают `kill -9`: после рестарта сервер поднимает их из WAL.
 
 ```
@@ -101,6 +116,55 @@ docker compose kill          # SIGKILL, shutdown hook не успевает
 docker compose up -d
 tsdb-cli query 'cpu_usage{host=~"web-.*"}' --start -1h --agg avg --by host   # данные на месте
 ```
+
+## Grafana
+
+```
+cd docker
+export GRAFANA_ADMIN_PASSWORD='придумайте-пароль'
+docker compose -f docker-compose.yml -f docker-compose.grafana.yml up -d --build
+```
+
+Grafana — `http://<хост>:3000`, логин `admin` и пароль из `GRAFANA_ADMIN_PASSWORD`; дашборд
+«TSDB — CPU по хостам» открывается сразу. Генератор `loadgen` при старте пишет 6 часов истории,
+дальше по точке на серию каждые 15 с.
+
+```mermaid
+---
+config:
+  htmlLabels: false
+  flowchart:
+    htmlLabels: false
+    padding: 12
+---
+flowchart LR
+    loadgen["loadgen<br/>tsdb-cli load"] -->|"gRPC WriteStream"| tsdb[("tsdb<br/>наша БД")]
+    grafana["Grafana<br/>:3000"] -->|"PromQL"| prom["Prometheus<br/>только исполняет PromQL"]
+    prom -->|"remote read<br/>POST /api/v1/read"| tsdb
+```
+
+Свой PromQL мы не пишем: Prometheus получает от БД сырые точки по matchers и диапазону
+(`POST /api/v1/read`, protobuf + snappy, включается `TSDB_HTTP_PORT`) и сам считает `avg by`,
+`rate`, `topk` и остальное. Своих данных у Prometheus нет.
+
+| Переменная | По умолчанию | Что задаёт |
+|---|---|---|
+| `GRAFANA_ADMIN_PASSWORD` | — (обязательна) | пароль `admin` в Grafana |
+| `GRAFANA_ADMIN_USER` | `admin` | логин администратора |
+| `GRAFANA_PORT` | `3000` | порт Grafana на хосте |
+| `LOAD_SERIES` | `40` | сколько серий пишет `loadgen` (по 4 ядра на хост) |
+
+Для сервера:
+- наружу открыт только порт Grafana. gRPC TSDB без авторизации, поэтому в этом режиме слушает только
+  `127.0.0.1:2222` (CLI с самого сервера работает); Prometheus и HTTP TSDB — только внутри сети compose;
+- анонимный вход и регистрация в Grafana выключены; для HTTPS ставьте перед Grafana reverse proxy
+  (nginx, Caddy) — порт 3000 тогда тоже лучше закрыть файрволом;
+- данные — в томах `tsdb-data` и `grafana-data`, переживают `down`/`up` (удаляет только `down -v`).
+
+Ограничение remote read: Prometheus не отдаёт через него списки значений лейблов, поэтому в
+браузере метрик Grafana пусто — запросы пишутся руками (`cpu_usage{host="host-0001"}`), а переменная
+`host` в дашборде берётся запросом `query_result(count by (host) (cpu_usage))`. И любой селектор
+должен содержать хотя бы одно `=` (обычно имя метрики): `{__name__=~"cpu.*"}` БД отклонит.
 
 ## Пакеты и владельцы
 
