@@ -25,7 +25,7 @@ RUN groupadd --system tsdb \
 
 WORKDIR /app
 COPY --from=build /src/tsdb-server/build/install/tsdb-server /app
-# CLI — для генератора нагрузки (loadgen в docker-compose.grafana.yml) и docker compose exec
+# CLI — для генератора нагрузки (loadgen в docker-compose.yml) и docker compose exec
 COPY --from=build /src/tsdb-cli/build/install/tsdb-cli /cli
 
 ENV TSDB_PORT=2222 \

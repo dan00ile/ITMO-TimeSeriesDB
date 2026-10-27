@@ -1,5 +1,10 @@
-# Один узел TSDB. Запуск из каталога docker/: docker compose up -d --build
-# В лабах 4-5 рядом появятся docker-compose.replica.yml и docker-compose.shard.yml.
+# TSDB + генератор нагрузки + Grafana. Запуск из каталога docker/: docker compose up -d --build
+# Grafana → Prometheus (исполняет PromQL) → remote read POST /api/v1/read → TSDB.
+# loadgen сразу пишет 6 часов истории, затем точки в реальном времени.
+#
+# Наружу открыта только Grafana (GRAFANA_PORT, по умолчанию 3000). gRPC TSDB без авторизации,
+# поэтому слушает 127.0.0.1 (открыть в сеть: GRPC_BIND=0.0.0.0); Prometheus и HTTP TSDB — только
+# внутри сети compose.
 name: tsdb
 
 services:
@@ -9,17 +14,68 @@ services:
       dockerfile: docker/Dockerfile
     image: tsdb-server:latest
     ports:
-      - "2222:2222"
+      - "${GRPC_BIND:-127.0.0.1}:2222:2222"
     environment:
       TSDB_BLOCK_RANGE_MS: "7200000"
       TSDB_RETENTION_MS: "2592000000"
       TSDB_WAL_SYNC_INTERVAL_MS: "100"
       TSDB_COMPACTION_INTERVAL_MS: "60000"
+      TSDB_HTTP_PORT: "9201"
     volumes:
       - tsdb-data:/data
     # сервер укладывается в 10 с на graceful shutdown, 15 с — с запасом до SIGKILL
     stop_grace_period: 15s
     restart: unless-stopped
 
+  loadgen:
+    # тот же образ, что собирает сервис tsdb: CLI лежит в /cli
+    image: tsdb-server:latest
+    pull_policy: never
+    # healthcheck образа проверяет gRPC-сервер, а в этом контейнере только клиент
+    healthcheck:
+      disable: true
+    depends_on:
+      tsdb:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    # повторный backfill после рестарта отклонится как out-of-order — это нормально, дальше реальное время
+    command:
+      - >-
+        /cli/bin/tsdb-cli --addr tsdb:2222 load --series $${LOAD_SERIES} --duration 6h --fast
+        && exec /cli/bin/tsdb-cli --addr tsdb:2222 load --series $${LOAD_SERIES} --duration 0
+    environment:
+      LOAD_SERIES: "${LOAD_SERIES:-40}"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=1h
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - tsdb
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/tsdb.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   tsdb-data:
+  grafana-data:

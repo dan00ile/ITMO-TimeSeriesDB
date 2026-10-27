@@ -14,13 +14,13 @@
 
 ```
 cd docker
-docker compose up -d --build            # собрать образ и запустить сервер на localhost:2222
+docker compose up -d --build            # TSDB на localhost:2222, генератор нагрузки, Prometheus, Grafana на :3000
 docker compose ps                       # STATUS: Up (healthy)
 grpcurl -plaintext localhost:2222 list  # tsdb.v1.TimeSeriesService, grpc.health.v1.Health, ...
 ```
 
-Остановить: `docker compose stop` (сервер дописывает WAL и закрывает блоки). Данные лежат в томе
-`tsdb-data` и переживают перезапуски, `docker compose down -v` удаляет их вместе с томом.
+Остановить: `docker compose stop` (сервер дописывает WAL и закрывает блоки). Данные лежат в томах
+`tsdb-data` и `grafana-data` и переживают перезапуски, `docker compose down -v` удаляет их вместе с томами.
 
 Если `grpcurl` не установлен, можно взять образ: `docker run --rm --network host fullstorydev/grpcurl
 -plaintext localhost:2222 list` (на macOS и Windows вместо `localhost` — `host.docker.internal`).
@@ -39,7 +39,7 @@ TSDB_DATA_DIR=./data tsdb-server/build/install/tsdb-server/bin/tsdb-server
 | `tsdb-server` | gRPC-сервер поверх фасада, `ServerConfig` |
 | `tsdb-cli` | клиент для записи, чтения и нагрузки |
 | `buildSrc` | общие настройки Gradle для всех модулей (`tsdb.java-conventions`) |
-| `docker/` | `Dockerfile`, `docker-compose.yml` |
+| `docker/` | `Dockerfile`, `docker-compose.yml`, конфиги Prometheus и Grafana |
 
 Сервер настраивается переменными окружения, в compose — блок `environment`:
 
@@ -122,7 +122,7 @@ tsdb-cli query 'cpu_usage{host=~"web-.*"}' --start -1h --agg avg --by host   # �
 ```
 cd docker
 export GRAFANA_ADMIN_PASSWORD='придумайте-пароль'
-docker compose -f docker-compose.yml -f docker-compose.grafana.yml up -d --build
+docker compose up -d --build
 ```
 
 Grafana — `http://<хост>:3000`, логин `admin` и пароль из `GRAFANA_ADMIN_PASSWORD`; дашборд
@@ -153,9 +153,10 @@ flowchart LR
 | `GRAFANA_ADMIN_USER` | `admin` | логин администратора |
 | `GRAFANA_PORT` | `3000` | порт Grafana на хосте |
 | `LOAD_SERIES` | `40` | сколько серий пишет `loadgen` (по 4 ядра на хост) |
+| `GRPC_BIND` | `127.0.0.1` | на каком адресе хоста слушает gRPC TSDB, `0.0.0.0` — открыть в сеть |
 
 Для сервера:
-- наружу открыт только порт Grafana. gRPC TSDB без авторизации, поэтому в этом режиме слушает только
+- наружу открыт только порт Grafana. gRPC TSDB без авторизации, поэтому по умолчанию слушает только
   `127.0.0.1:2222` (CLI с самого сервера работает); Prometheus и HTTP TSDB — только внутри сети compose;
 - анонимный вход и регистрация в Grafana выключены; для HTTPS ставьте перед Grafana reverse proxy
   (nginx, Caddy) — порт 3000 тогда тоже лучше закрыть файрволом;
