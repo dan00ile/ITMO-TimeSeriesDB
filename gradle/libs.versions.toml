@@ -1,12 +1,36 @@
-# Одно место для версий на все модули: с лабы 3 их будет пять.
+# Одно место для версий на все модули.
 [versions]
 jackson = "2.20.0"
 junit = "5.13.4"
+# grpc-java и protobuf-java должны быть совместимы: protoc генерирует код под runtime той же версии
+grpc = "1.84.2"
+protobuf = "4.36.2"
+protobufPlugin = "0.10.0"
+picocli = "4.7.7"
+slf4j = "2.0.17"
+logback = "1.5.38"
 
 [libraries]
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+
+protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }
+grpc-protobuf = { module = "io.grpc:grpc-protobuf", version.ref = "grpc" }
+grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
+grpc-netty-shaded = { module = "io.grpc:grpc-netty-shaded", version.ref = "grpc" }
+grpc-services = { module = "io.grpc:grpc-services", version.ref = "grpc" }
+grpc-inprocess = { module = "io.grpc:grpc-inprocess", version.ref = "grpc" }
+grpc-testing = { module = "io.grpc:grpc-testing", version.ref = "grpc" }
+tomcat-annotations = { module = "org.apache.tomcat:annotations-api", version = "6.0.53" }
+picocli = { module = "info.picocli:picocli", version.ref = "picocli" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+# System.Logger из tsdb-core пишет в тот же logback, что и сервер
+slf4j-jdk-platform-logging = { module = "org.slf4j:slf4j-jdk-platform-logging", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 
 # версии junit-артефактов приходят из junit-bom
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+
+[plugins]
+protobuf = { id = "com.google.protobuf", version.ref = "protobufPlugin" }

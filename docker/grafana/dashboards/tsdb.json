@@ -1,0 +1,96 @@
+{
+  "uid": "tsdb-overview",
+  "title": "TSDB — CPU по хостам",
+  "description": "Данные из нашей TimeSeriesDB: Grafana → Prometheus (PromQL) → remote read → TSDB",
+  "tags": ["tsdb"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Хост",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "tsdb" },
+        "definition": "query_result(count by (host) (cpu_usage))",
+        "query": { "query": "query_result(count by (host) (cpu_usage))", "refId": "host" },
+        "regex": "/host=\"([^\"]+)\"/",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Серий cpu_usage",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "tsdb" },
+      "targets": [ { "refId": "A", "expr": "count(cpu_usage)", "instant": true } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Средняя загрузка сейчас",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "tsdb" },
+      "targets": [ { "refId": "A", "expr": "avg(cpu_usage{host=~\"$host\"})", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 1 } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "graphMode": "area" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Самый загруженный хост",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "tsdb" },
+      "targets": [
+        { "refId": "A", "expr": "topk(1, avg by (host) (cpu_usage{host=~\"$host\"}))", "instant": true, "legendFormat": "{{host}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 1 } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name", "graphMode": "none" }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Средняя загрузка CPU по хостам — avg by (host)",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 10 },
+      "datasource": { "type": "prometheus", "uid": "tsdb" },
+      "targets": [ { "refId": "A", "expr": "avg by (host) (cpu_usage{host=~\"$host\"})", "legendFormat": "{{host}}" } ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "options": { "legend": { "displayMode": "list", "placement": "right" }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Ядра одного хоста — сырые серии cpu_usage{core}",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "tsdb" },
+      "targets": [ { "refId": "A", "expr": "cpu_usage{host=\"host-0000\"}", "legendFormat": "core {{core}}" } ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Мин / среднее / макс по всем сериям",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "tsdb" },
+      "targets": [
+        { "refId": "A", "expr": "min(cpu_usage{host=~\"$host\"})", "legendFormat": "min" },
+        { "refId": "B", "expr": "avg(cpu_usage{host=~\"$host\"})", "legendFormat": "avg" },
+        { "refId": "C", "expr": "max(cpu_usage{host=~\"$host\"})", "legendFormat": "max" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    }
+  ]
+}

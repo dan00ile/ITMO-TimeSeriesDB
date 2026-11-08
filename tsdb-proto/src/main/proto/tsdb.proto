@@ -1,0 +1,60 @@
+// Публичный протокол TSDB. Номера полей не меняем: новые поля — только с новыми номерами.
+// В лабах 4-5 тот же файл обслуживает трафик между репликами и шардами.
+syntax = "proto3";
+
+package tsdb.v1;
+
+option java_package = "org.tsdb.proto";
+option java_multiple_files = true;
+
+message Label  { string name = 1; string value = 2; }
+message Sample { int64 timestamp_ms = 1; double value = 2; }
+
+message TimeSeries {
+  repeated Label  labels  = 1;  // включая __name__
+  repeated Sample samples = 2;  // отсортированы по времени
+}
+
+message WriteRequest { repeated TimeSeries series = 1; }
+message WriteResponse {
+  uint64 accepted = 1;
+  uint64 rejected = 2;          // out-of-order и т.п.
+  repeated string errors = 3;   // первые N сообщений
+}
+
+message Matcher {
+  enum Type { EQ = 0; NEQ = 1; RE = 2; NRE = 3; }
+  Type   type  = 1;
+  string name  = 2;
+  string value = 3;
+}
+
+enum Aggregation { NONE = 0; SUM = 1; AVG = 2; MIN = 3; MAX = 4; COUNT = 5; }
+
+message QueryRequest {
+  repeated Matcher matchers    = 1;
+  int64  start_ms              = 2;
+  int64  end_ms                = 3;
+  Aggregation aggregation      = 4;
+  repeated string group_by     = 5;
+  int64  step_ms               = 6;  // 0 = без step, как Query.step в tsdb-core
+}
+message QueryResponse { repeated TimeSeries series = 1; }
+
+message LabelValuesRequest  { string name = 1; }
+message LabelValuesResponse { repeated string values = 1; }
+message LabelNamesRequest   {}
+message LabelNamesResponse  { repeated string names = 1; }
+
+message Empty {}
+message Stats { uint64 series = 1; uint64 blocks = 2; uint64 head_samples = 3; uint64 disk_bytes = 4; }
+
+service TimeSeriesService {
+  rpc Write       (WriteRequest)        returns (WriteResponse);
+  rpc WriteStream (stream WriteRequest) returns (WriteResponse);  // для агентов и генератора нагрузки
+  rpc Query       (QueryRequest)        returns (QueryResponse);
+  rpc LabelNames  (LabelNamesRequest)   returns (LabelNamesResponse);
+  rpc LabelValues (LabelValuesRequest)  returns (LabelValuesResponse);
+  rpc Flush       (Empty)               returns (Empty);          // админ
+  rpc GetStats    (Empty)               returns (Stats);
+}
