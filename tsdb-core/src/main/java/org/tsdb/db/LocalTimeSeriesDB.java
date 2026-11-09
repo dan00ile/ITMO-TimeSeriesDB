@@ -123,14 +123,34 @@ public final class LocalTimeSeriesDB implements TimeSeriesDB {
         return paths;
     }
 
+    /** Максимальный timestamp в head и восстановленных блоках; для пустой БД — Long.MIN_VALUE. */
+    public long maxTimestamp() {
+        lock.readLock().lock();
+        try {
+            checkOpen();
+            return Math.max(head.maxTime(), blocksMaxTime);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
     /**
      * Возвращает WAL текущей базы.
      *
      * Только для внутренних механизмов репликации.
      * Вызывающий код не должен закрывать этот WAL.
+     *
+     * Журнал для репликации: лидер читает его через readFrom, фолловер дописывает
+     * полученные записи перед applyRecord. После close — IllegalStateException.
      */
     public Wal wal() {
-        return wal;
+        lock.readLock().lock();
+        try {
+            checkOpen();
+            return wal;
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     @Override
@@ -411,7 +431,53 @@ public final class LocalTimeSeriesDB implements TimeSeriesDB {
     }
 
     private void replayWal() {
-        wal.replay(record -> {
+        wal.replay(this::applyRecord);
+    }
+
+    /**
+     * Только для репликации: проверяет запись до помещения в локальный WAL, не меняя память.
+     * Фолловер должен оставаться единственным писателем между проверкой и applyRecord;
+     * promote обязан сначала остановить его поток.
+     */
+    public void validateRecord(WalRecord record) {
+        Objects.requireNonNull(record, "record");
+        lock.readLock().lock();
+        try {
+            checkOpen();
+            switch (record) {
+                case WalRecord.SeriesCreated created -> {
+                    OptionalLong known = head.registry().get(created.labels());
+                    var existing = head.registry().labels(created.id());
+                    if (created.id() <= 0
+                            || (known.isPresent() && known.getAsLong() != created.id())
+                            || (existing.isPresent() && !existing.get().equals(created.labels()))) {
+                        throw new CorruptedWalException("conflicting or invalid series id " + created.id());
+                    }
+                }
+                case WalRecord.Samples samples -> {
+                    for (SampleEntry entry : samples.entries()) {
+                        if (head.registry().labels(entry.seriesId()).isEmpty()) {
+                            throw new CorruptedWalException("sample of unknown series " + entry.seriesId());
+                        }
+                    }
+                }
+            }
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Применяет запись журнала к head, не записывая её в собственный WAL, — только
+     * для репликации: фолловер сохраняет запись в свой WAL сам (wal().append) и применяет
+     * её тем же кодом, что и replay при старте. Дубли SeriesCreated идемпотентны, точки
+     * не новее последней пропускаются; неизвестная серия или конфликт id — CorruptedWalException.
+     */
+    public void applyRecord(WalRecord record) {
+        Objects.requireNonNull(record, "record");
+        lock.writeLock().lock();
+        try {
+            checkOpen();
             switch (record) {
                 case WalRecord.SeriesCreated created -> restoreSeries(created.id(), created.labels());
                 case WalRecord.Samples samples -> {
@@ -420,7 +486,9 @@ public final class LocalTimeSeriesDB implements TimeSeriesDB {
                     }
                 }
             }
-        });
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     // Серия получает ровно id из журнала: после truncateBefore первые SeriesCreated уже удалены
