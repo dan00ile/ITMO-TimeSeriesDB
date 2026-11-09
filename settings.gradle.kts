@@ -5,4 +5,4 @@ plugins {
 rootProject.name = "ITMO-TimeSeriesDB"
 
 // tsdb-cluster появится в лабе 4
-include("tsdb-core", "tsdb-proto", "tsdb-server", "tsdb-cli")
+include("tsdb-core", "tsdb-proto", "tsdb-server", "tsdb-cli", "tsdb-cluster")

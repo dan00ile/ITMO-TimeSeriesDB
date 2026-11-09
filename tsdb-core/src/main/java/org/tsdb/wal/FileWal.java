@@ -15,6 +15,8 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 import java.util.zip.CRC32;
 
+import java.util.function.Supplier;
+
 import static java.nio.file.StandardOpenOption.*;
 
 public final class FileWal implements Wal {
@@ -35,8 +37,12 @@ public final class FileWal implements Wal {
 
     private FileChannel channel;
     private long currentSegment;
+    private WalPosition lastWrittenPosition;
     private long lastSyncNanos;
     private boolean closed;
+    private Supplier<Optional<WalPosition>> walRetentionFloor =
+            Optional::empty;
+    private Consumer<WalPosition> appendListener = pos -> {};
 
     public FileWal(DbOptions options) {
         this(DbPaths.of(options).walDir(),
@@ -90,6 +96,36 @@ public final class FileWal implements Wal {
         }
     }
 
+    /**
+     * Устанавливает слушатель новых записей WAL.
+     * Используется механизмом репликации.
+     */
+    public synchronized void setAppendListener(
+            Consumer<WalPosition> listener
+    ) {
+        this.appendListener = Objects.requireNonNull(listener);
+    }
+
+    /**
+     * Возвращает позицию последней записи WAL.
+     * Используется для инициализации ReplicationHub.
+     */
+    public synchronized Optional<WalPosition> lastPosition() {
+        checkOpen();
+        return Optional.ofNullable(lastWrittenPosition);
+    }
+
+    /**
+     * Задаёт источник минимальной позиции WAL,
+     * которую необходимо сохранить для репликации.
+     */
+    public synchronized void setWalRetentionFloor(
+            Supplier<Optional<WalPosition>> supplier
+    ) {
+        this.walRetentionFloor =
+                Objects.requireNonNull(supplier, "supplier");
+    }
+
     @Override
     public synchronized WalPosition append(WalRecord record) {
         checkOpen();
@@ -123,6 +159,10 @@ public final class FileWal implements Wal {
                 sync();
             }
 
+            lastWrittenPosition = position;
+
+            appendListener.accept(position);
+
             return position;
         } catch (IOException e) {
             throw new UncheckedIOException("WAL append failed", e);
@@ -155,51 +195,59 @@ public final class FileWal implements Wal {
         }
     }
 
+
     @Override
     public synchronized Stream<WalEntry> readFrom(WalPosition position) {
         checkOpen();
-        Objects.requireNonNull(position);
+        Objects.requireNonNull(position, "position");
 
-        List<WalEntry> entries = readAll();
+        try {
+            List<Long> segments = listSegments();
 
-        if (entries.isEmpty()) {
-            if (position.segment() < currentSegment) {
+            // Если запрошенный сегмент уже удалён.
+            if (segments.isEmpty()
+                    || position.segment() < segments.get(0)) {
                 throw new IllegalStateException("WAL position expired");
             }
-            if (position.segment() == currentSegment &&
-                    position.offset() == 0) {
+
+            // Проверяем, что запрошенный сегмент существует.
+            if (!segments.contains(position.segment())) {
+                throw new IllegalArgumentException(
+                        "Invalid WAL position: " + position);
+            }
+
+            // Позиция непосредственно в конце текущего WAL допустима.
+            WalPosition end = new WalPosition(
+                    currentSegment, channel.size());
+
+            if (position.equals(end)) {
                 return Stream.empty();
             }
-            throw new IllegalArgumentException("Invalid WAL position");
-        }
 
-        WalPosition oldest = entries.get(0).position();
+            // Читаем только начиная с нужного сегмента.
+            List<WalEntry> entries = new ArrayList<>();
 
-        if (position.compareTo(oldest) < 0) {
-            throw new IllegalStateException("WAL position expired");
-        }
-
-        // Допускаем позицию непосредственно за последней записью.
-        WalPosition end;
-        try {
-            end = new WalPosition(currentSegment, channel.size());
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-
-        if (position.equals(end)) {
-            return Stream.empty();
-        }
-
-        for (int i = 0; i < entries.size(); i++) {
-            if (entries.get(i).position().equals(position)) {
-                return entries.subList(i, entries.size()).stream();
+            for (long segment : segments) {
+                if (segment >= position.segment()) {
+                    scan(segment, false, entries);
+                }
             }
-        }
 
-        throw new IllegalArgumentException(
-                "Position is not a record boundary: " + position);
+            // Находим точную позицию записи.
+            for (int i = 0; i < entries.size(); i++) {
+                if (entries.get(i).position().equals(position)) {
+                    return entries.subList(i, entries.size()).stream();
+                }
+            }
+
+            throw new IllegalArgumentException(
+                    "Position is not a record boundary: " + position);
+
+        } catch (IOException e) {
+            throw new UncheckedIOException("Cannot read WAL", e);
+        }
     }
+
 
     @Override
     public synchronized void truncateBefore(long timestamp) {
@@ -212,10 +260,23 @@ public final class FileWal implements Wal {
                 rotate();
             }
 
+            Optional<WalPosition> floor = walRetentionFloor.get();
+
             List<Long> expired = new ArrayList<>();
+
             for (Map.Entry<Long, Long> e : maxTimestamps.entrySet()) {
-                if (e.getKey() != currentSegment && e.getValue() < timestamp) {
-                    expired.add(e.getKey());
+                long segment = e.getKey();
+
+                boolean oldEnough =
+                        segment != currentSegment
+                                && e.getValue() < timestamp;
+
+                boolean safeForReplication =
+                        floor.isEmpty()
+                                || segment < floor.get().segment();
+
+                if (oldEnough && safeForReplication) {
+                    expired.add(segment);
                 }
             }
             if (expired.isEmpty()) {
@@ -439,6 +500,11 @@ public final class FileWal implements Wal {
                         new WalPosition(segment, offset), record));
             } else {
                 updateMetadata(segment, record);
+
+                if (segment >= 0) {
+                    lastWrittenPosition =
+                            new WalPosition(segment, offset);
+                }
             }
 
             offset += 8 + length;

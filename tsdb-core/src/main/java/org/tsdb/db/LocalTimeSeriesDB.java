@@ -44,6 +44,7 @@ import org.tsdb.wal.CorruptedWalException;
 import org.tsdb.wal.SampleEntry;
 import org.tsdb.wal.Wal;
 import org.tsdb.wal.WalRecord;
+import org.tsdb.wal.WalPosition;
 
 /**
  * Одноузловая БД: связывает слои и держит порядок «WAL раньше памяти». Сама не сжимает,
@@ -122,19 +123,60 @@ public final class LocalTimeSeriesDB implements TimeSeriesDB {
         return paths;
     }
 
+    /**
+     * Возвращает WAL текущей базы.
+     *
+     * Только для внутренних механизмов репликации.
+     * Вызывающий код не должен закрывать этот WAL.
+     */
+    public Wal wal() {
+        return wal;
+    }
+
     @Override
     public void append(Labels labels, long timestamp, double value) {
         appendBatch(List.of(new SampleInput(labels, timestamp, value)));
     }
 
+
     @Override
     public void appendBatch(List<SampleInput> batch) {
+        appendBatchInternal(batch);
+    }
+
+    /**
+     * Записывает пакет точек и возвращает позицию
+     * последней WAL-записи этого пакета.
+     *
+     * Используется лидером для ожидания Ack в semi-sync.
+     *
+     * @throws IllegalArgumentException если пакет пустой
+     */
+    public WalPosition appendBatchAt(List<SampleInput> batch) {
         Objects.requireNonNull(batch, "batch");
+
+        if (batch.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Cannot return WAL position for an empty batch");
+        }
+
+        return appendBatchInternal(batch);
+    }
+
+    /**
+     * Общая реализация записи для appendBatch
+     * и appendBatchAt.
+     */
+    private WalPosition appendBatchInternal(List<SampleInput> batch) {
+        Objects.requireNonNull(batch, "batch");
+
         lock.writeLock().lock();
         try {
             checkOpen();
+
             List<SampleEntry> entries = new ArrayList<>();
             RuntimeException error = null;
+
             for (SampleInput input : batch) {
                 try {
                     entries.add(prepare(input));
@@ -143,22 +185,31 @@ public final class LocalTimeSeriesDB implements TimeSeriesDB {
                     break;
                 }
             }
+
+            WalPosition position = null;
+
             if (!entries.isEmpty()) {
-                wal.append(new WalRecord.Samples(entries));
+                position = wal.append(new WalRecord.Samples(entries));
+
                 if (options.walSyncIntervalMs() == 0) {
                     wal.sync();
                 }
+
                 for (SampleEntry e : entries) {
                     head.append(e.seriesId(), e.timestamp(), e.value());
                 }
             }
+
             if (error != null) {
                 throw error;
             }
+
+            return position;
         } finally {
             lock.writeLock().unlock();
         }
     }
+
 
     @Override
     public QueryResult query(Query query) {
